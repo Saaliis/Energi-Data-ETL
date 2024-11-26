@@ -1,0 +1,6 @@
+data/
+output/
+*.parquet
+*.csv
+*.db
+.env
