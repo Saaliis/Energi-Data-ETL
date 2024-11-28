@@ -4,3 +4,5 @@ output/
 *.csv
 *.db
 .env
+arcane-storm-403613-eff5429c4c52.json
+*.json
