@@ -17,3 +17,4 @@ Instructions on how to set up and run the project will be added soon.
 - PostgreSQL
 - Power BI / Grafana
 
+d
