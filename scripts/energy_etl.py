@@ -1,62 +1,115 @@
 import os
-import pyarrow
 import requests
 from datetime import datetime, timedelta
 import pandas as pd
 from google.cloud import bigquery
 import time
-import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
 
-# Load environment variables
+# Ladda miljövariabler från .env
 load_dotenv()
 
-# Configure credentials and API settings from .env
-GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+# API-token och andra inställningar från .env
 API_TOKEN = os.getenv("API_TOKEN")
 PROJECT_ID = os.getenv("PROJECT_ID")
 DATASET_ID = "Energy_Data"
-TABLE_ID = "load_data"
+TABLE_ID = "sweden_daily_load"
 
-# Set credentials path
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.abspath(GOOGLE_APPLICATION_CREDENTIALS)
+# Elpriser API URL
+url = "https://www.elprisetjustnu.se/api/v1/prices/{}/{:02d}-{:02d}_{}.json"  # URL med format för år, månad, dag, zon
 
-# ENTSO-E API URL
-url = "https://web-api.tp.entsoe.eu/api"
+# Zoner för Sverige
+zones = [
+    "SE1",  # Zone SE1
+    "SE2",  # Zone SE2
+    "SE3",  # Zone SE3
+    "SE4"   # Zone SE4
+]
 
-# Timezones and date formats
-now = datetime.utcnow()
-start_date = (now - timedelta(days=1)).strftime("%Y%m%d%H00")  # 24 hours back
-end_date = now.strftime("%Y%m%d%H00")
+def fetch_data():
+    """Fetch data from the Elpriser API for all Swedish zones"""
+    now = datetime.utcnow()
+    start_date = now.strftime("%Y-%m-%d")  # Dagens datum
+    end_date = now.strftime("%Y-%m-%d")  # Dagens datum
 
-# Zone identifier for Sweden - SE1 (BZN1SE1)
-zone = "10YSE-1--------K"
+    for zone in zones:
+        # Skapa URL med rätt prisklass (zon) för varje anrop
+        api_url = url.format(now.year, now.month, now.day, zone)
+
+        print(f"Hämtar data för zon: {zone}")
+        print(f"API-url: {api_url}")
+
+        num_retries = 3
+        for retry in range(num_retries):
+            try:
+                response = requests.get(api_url)  # Skicka förfrågan utan extra params då de är redan i URL
+                print(f"Respons Statuskod: {response.status_code}")
+
+                if response.status_code == 200:
+                    try:
+                        # Skriv ut API-responsen för att inspektera strukturen
+                        data = response.json()  # API-svar i JSON-format
+                        data_filtered = []
+
+                        # Bearbeta varje post i svaret
+                        for item in data:
+                            # Använd 'time_start' istället för 'timestamp'
+                            timestamp = item['time_start']
+                            price = item['SEK_per_kWh']
+                            # Lägg till zonen till varje datapunkt
+                            data_filtered.append([timestamp, price, zone])
+
+                        if data_filtered:
+                            df = pd.DataFrame(data_filtered, columns=["timestamp", "price", "zone"])
+                            print(f"Hittade {len(df)} datapunkter")
+                            print("\nExempeldata:")
+                            print(df.head())
+
+                            # Konvertera 'timestamp' kolumnen till datetime
+                            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+                            save_to_bigquery(df)
+                        else:
+                            print(f"Inga data funna för {zone}")
+                    except Exception as e:
+                        print(f"Fel vid bearbetning av API-svar: {str(e)}")
+                        print("Hoppar över denna förfrågan.")
+                    break
+                else:
+                    print(f"Fel vid hämtning av data för {zone}, försöker igen... ({retry+1}/{num_retries})")
+                    time.sleep(5)
+            except Exception as e:
+                print(f"Ett fel inträffade: {str(e)}")
+                if retry < num_retries - 1:
+                    print(f"Försöker igen... ({retry+1}/{num_retries})")
+                    time.sleep(5)
+                else:
+                    print(f"Misslyckades att hämta data för {zone} efter {num_retries} försök.")
+
+            # Sleep för att undvika att göra för många API-anrop snabbt
+            time.sleep(5)
 
 def save_to_bigquery(df):
     client = bigquery.Client()
     table_id = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
     
-    # Configure table schema
+    # Definiera BigQuery schema
     schema = [
-        bigquery.SchemaField("zone", "STRING"),
         bigquery.SchemaField("timestamp", "TIMESTAMP"),
-        bigquery.SchemaField("position", "INTEGER"),
-        bigquery.SchemaField("quantity", "FLOAT"),
+        bigquery.SchemaField("price", "FLOAT"),
+        bigquery.SchemaField("zone", "STRING"),  # Lägg till 'zone' i schema
         bigquery.SchemaField("load_timestamp", "TIMESTAMP")
     ]
     
-    # Add load timestamp
+    # Lägg till timestamp för när datan laddades
     df['load_timestamp'] = datetime.utcnow()
     
-    # Convert timestamp to correct format
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    
     try:
-        # Create or get the table
+        # Skapa tabell eller få den existerande
         table = bigquery.Table(table_id, schema=schema)
         table = client.create_table(table, exists_ok=True)
         
-        # Load data
+        # Ladda data till BigQuery
         job_config = bigquery.LoadJobConfig(
             schema=schema,
             write_disposition="WRITE_APPEND",
@@ -65,76 +118,11 @@ def save_to_bigquery(df):
         job = client.load_table_from_dataframe(
             df, table_id, job_config=job_config
         )
-        job.result()  # Wait for the job to complete
+        job.result()  # Vänta på att jobbet slutförs
         
-        print(f"Loaded {len(df)} rows to {table_id}")
+        print(f"Laddade {len(df)} rader till {table_id}")
     except Exception as e:
-        print(f"Error saving to BigQuery: {str(e)}")
-
-def fetch_data():
-    """Fetch data from the ENTSO-E API"""
-    params = {
-        "documentType": "A65",          # Total load
-        "processType": "A16",           # Realised
-        "outBiddingZone_Domain": zone,
-        "periodStart": start_date,
-        "periodEnd": end_date,
-        "securityToken": API_TOKEN
-    }
-
-    print(f"Fetching data for period: {start_date} to {end_date}")
-    print(f"API parameters: {params}")
-
-    try:
-        response = requests.get(url, params=params)
-        print(f"Response Status Code: {response.status_code}")
-        
-        if response.status_code == 200:
-            # Check if we got an error message
-            if 'Acknowledgement_MarketDocument' in response.text:
-                root = ET.fromstring(response.text)
-                reason = root.find('.//Reason/text').text
-                print(f"API Message: {reason}")
-                return
-            
-            # Parse XML
-            root = ET.fromstring(response.text)
-            
-            # Define namespace
-            ns = {'ns': 'urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0'}
-            
-            # Extract data from XML
-            data_filtered = []
-            
-            # Process time series data
-            for timeseries in root.findall('.//ns:TimeSeries', ns):
-                for period in timeseries.findall('.//ns:Period', ns):
-                    start_time = period.find('ns:timeInterval/ns:start', ns).text
-                    print(f"Processing data for period: {start_time}")
-                    
-                    for point in period.findall('ns:Point', ns):
-                        position = point.find('ns:position', ns).text
-                        quantity = point.find('ns:quantity', ns).text
-                        data_filtered.append([
-                            zone,
-                            start_time,
-                            int(position),
-                            float(quantity)
-                        ])
-            
-            if data_filtered:
-                df = pd.DataFrame(data_filtered, columns=["zone", "timestamp", "position", "quantity"])
-                print(f"Found {len(df)} data points")
-                print("\nExample data:")
-                print(df.head())
-                save_to_bigquery(df)
-            else:
-                print("No data found in XML response")
-                
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-
-    time.sleep(6)
+        print(f"Fel vid spara till BigQuery: {str(e)}")
 
 if __name__ == "__main__":
     fetch_data()
