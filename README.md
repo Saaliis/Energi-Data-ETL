@@ -11,7 +11,13 @@ En komplett ETL-pipeline för att extrahera, transformera och ladda energiprisda
 Detta projekt är en ETL-pipeline som hämtar elpriser från [elprisetjustnu.se](https://www.elprisetjustnu.se/), transformerar datan och laddar upp den till BigQuery för vidare analys. Pipeline täcker zonerna SE1, SE2, SE3 och SE4.
 
 ## Struktur
-Energy-Data-ETL/ ├── scripts/ # Python-skript för ETL ├── notebooks/ # Notebooks för analys och tester ├── data/ # Exempeldata ├── docker/ # Docker-konfiguration ├── .env # Miljövariabler (inte inkluderad i repo) ├── .gitignore # Ignorerar känsliga filer ├── README.md # Projektbeskrivning ├── requirements.txt # Bibliotek för att köra projektet └── LICENSE # Licensfil
+Energy-Data-ETL/ 
+├── scripts/ # Python-skript för ETL  
+├── .env # Miljövariabler (inte inkluderad i repo) 
+├── .gitignore # Ignorerar känsliga filer 
+├── README.md # Projektbeskrivning 
+└── requirements.txt # Bibliotek för att köra projektet 
+
 
 ## Funktioner
 - **Extract**: Hämtar elpriser från API.
