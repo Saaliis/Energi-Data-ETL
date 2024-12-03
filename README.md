@@ -1,6 +1,6 @@
 # Energy Data ETL Pipeline
 
-A complete ETL pipeline for extracting, transforming, and loading energy price data for all Swedish zones. This project integrates **Python**, **BigQuery**, and **Power BI** to demonstrate real-time energy data analysis.
+En komplett ETL-pipeline för att extrahera, transformera och ladda energiprisdata för alla svenska elområden. Detta projekt integrerar Python, BigQuery och Power BI för att demonstrera realtidsanalys av energidata.
 
 ![Python](https://img.shields.io/badge/-Python-blue)
 ![Power BI](https://img.shields.io/badge/-Power%20BI-yellow)
