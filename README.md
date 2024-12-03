@@ -13,12 +13,12 @@ Detta projekt är en ETL-pipeline som hämtar elpriser från [elprisetjustnu.se]
 ## Databasstruktur
 Denna bild visar strukturen i BigQuery-databasen:
 
-![Databasstruktur](images/databasstruktur.png)
+![Databasstruktur](images/Bigquery.png)
 
 ## Slutlig Dashboard
 Här är en bild av den slutliga Power BI-dashboards:
 
-![Dashboard](images/dashboard.png)
+![Dashboard](images/Powerbi.png)
 
 
 ## Funktioner
