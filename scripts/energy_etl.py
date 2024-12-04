@@ -6,54 +6,49 @@ from google.cloud import bigquery
 import time
 from dotenv import load_dotenv
 
-# Ladda miljövariabler från .env
+# Load environment variables
 load_dotenv()
 
-# API-token och andra inställningar från .env
+# Environment configurations
 API_TOKEN = os.getenv("API_TOKEN")
 PROJECT_ID = os.getenv("PROJECT_ID")
 DATASET_ID = "Energy_Data"
-TABLE_ID = "sweden_daily_load"
+TABLE_ID = "sweden_daily_avg"  # Correct table name with proper structure
 
-# Elpriser API URL
-url = "https://www.elprisetjustnu.se/api/v1/prices/{}/{:02d}-{:02d}_{}.json"  # URL med format för år, månad, dag, zon
-
-# Zoner för Sverige
-zones = [
-    "SE1",  # Zone SE1
-    "SE2",  # Zone SE2
-    "SE3",  # Zone SE3
-    "SE4"   # Zone SE4
-]
+# API URL template
+url = "https://www.elprisetjustnu.se/api/v1/prices/{}/{:02d}-{:02d}_{}.json"
+zones = ["SE1", "SE2", "SE3", "SE4"]  # Swedish zones
 
 def get_latest_date_from_bigquery():
-    """Hämtar senaste datum från BigQuery-tabellen."""
+    """Fetch the latest date from the BigQuery table."""
     client = bigquery.Client()
     query = f"""
-        SELECT MAX(DATE(timestamp)) AS latest_date
+        SELECT MAX(date) AS latest_date
         FROM `{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}`
     """
     try:
         query_job = client.query(query)
         result = query_job.result()
         latest_date = result.to_dataframe().iloc[0]['latest_date']
+        print(f"Latest date in the table: {latest_date}")
         return latest_date
     except Exception as e:
-        print(f"Fel vid hämtning av senaste datum från BigQuery: {str(e)}")
+        print(f"Error fetching latest date from BigQuery: {str(e)}")
         return None
 
 def fetch_data():
-    """Hämtar data från Elpriser API för alla svenska zoner från senaste sparade datum."""
+    """Fetch data from the Elpriser API."""
     latest_date = get_latest_date_from_bigquery()
     if latest_date:
-        start_date = latest_date + timedelta(days=1)  # Börja från dagen efter senaste sparade datum
+        start_date = datetime.combine(latest_date, datetime.min.time()) + timedelta(days=1)
     else:
-        print("Ingen data hittades i databasen, börjar från 10 dagar bakåt.")
+        print("No data found in the database, starting from 10 days ago.")
         start_date = datetime.utcnow() - timedelta(days=10)
 
-    end_date = datetime.utcnow()  # Slutdatum är idag
+    end_date = datetime.utcnow()
+    print(f"Fetching data from {start_date.date()} to {end_date.date()}")
 
-    print(f"Hämtar data från {start_date.date()} till {end_date.date()}")
+    all_data = []
 
     for zone in zones:
         current_date = start_date
@@ -67,85 +62,53 @@ def fetch_data():
             for retry in range(num_retries):
                 try:
                     response = requests.get(api_url)
-                    print(f"Respons Statuskod: {response.status_code}")
-
                     if response.status_code == 200:
                         try:
-                            # Bearbeta API-svar
                             data = response.json()
-                            data_filtered = []
-
-                            for item in data:
-                                timestamp = item['time_start']
-                                price = item['SEK_per_kWh']
-                                data_filtered.append([timestamp, price, zone])
-
-                            if data_filtered:
-                                df = pd.DataFrame(data_filtered, columns=["timestamp", "price", "zone"])
-                                print(f"Hittade {len(df)} datapunkter")
-                                print("\nExempeldata:")
-                                print(df.head())
-
-                                # Konvertera 'timestamp' kolumnen till datetime
-                                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                                save_to_bigquery(df)
-                            else:
-                                print(f"Inga data funna för {zone}")
+                            # Calculate the daily average price for the zone
+                            avg_price = sum(item['SEK_per_kWh'] for item in data) / len(data)
+                            all_data.append([current_date.date(), zone, avg_price])
                         except Exception as e:
-                            print(f"Fel vid bearbetning av API-svar: {str(e)}")
-                            print("Hoppar över denna förfrågan.")
+                            print(f"Error processing API response: {str(e)}")
                         break
                     else:
-                        print(f"Fel vid hämtning av data för {zone}, försöker igen... ({retry+1}/{num_retries})")
-                        time.sleep(5)
+                        print(f"Failed to fetch data for {zone}: {response.status_code}")
                 except Exception as e:
-                    print(f"Ett fel inträffade: {str(e)}")
-                    if retry < num_retries - 1:
-                        print(f"Försöker igen... ({retry+1}/{num_retries})")
-                        time.sleep(5)
-                    else:
-                        print(f"Misslyckades att hämta data för {zone} efter {num_retries} försök.")
-
-            # Sleep för att undvika att göra för många API-anrop snabbt
-            time.sleep(5)
-
-            # Gå till nästa dag
+                    print(f"Error fetching data for {zone}: {str(e)}")
+                time.sleep(5)
             current_date += timedelta(days=1)
 
+    # Convert all_data to DataFrame
+    if all_data:
+        df = pd.DataFrame(all_data, columns=["date", "zone", "avg_price"])
+        save_to_bigquery(df)
+
 def save_to_bigquery(df):
+    """Save the data to the existing BigQuery table."""
     client = bigquery.Client()
     table_id = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
-    
-    # Definiera BigQuery schema
+
+    # Define BigQuery schema
     schema = [
-        bigquery.SchemaField("timestamp", "TIMESTAMP"),
-        bigquery.SchemaField("price", "FLOAT"),
+        bigquery.SchemaField("date", "DATE"),
         bigquery.SchemaField("zone", "STRING"),
+        bigquery.SchemaField("avg_price", "FLOAT"),
         bigquery.SchemaField("load_timestamp", "TIMESTAMP")
     ]
-    
-    # Lägg till timestamp för när datan laddades
+
+    # Add a load timestamp column
     df['load_timestamp'] = datetime.utcnow()
-    
+
     try:
-        # Skapa tabell eller få den existerande
-        table = bigquery.Table(table_id, schema=schema)
-        table = client.create_table(table, exists_ok=True)
-        
-        # Ladda data till BigQuery
         job_config = bigquery.LoadJobConfig(
             schema=schema,
             write_disposition="WRITE_APPEND",
         )
-        
-        job = client.load_table_from_dataframe(
-            df, table_id, job_config=job_config
-        )
-        job.result()  # Vänta på att jobbet slutförs
-        
-        print(f"Laddade {len(df)} rader till {table_id}")
+        job = client.load_table_from_dataframe(df, table_id, job_config=job_config)
+        job.result()
+        print(f"Loaded {len(df)} rows to {table_id}")
     except Exception as e:
-        print(f"Fel vid spara till BigQuery: {str(e)}")
+        print(f"Error saving to BigQuery: {str(e)}")
 
 if __name__ == "__main__":
     fetch_data()
